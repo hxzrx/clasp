@@ -596,15 +596,16 @@ ALWAYS_INLINE T_O *va_lexicalFunction(size_t depth, size_t index, core::T_O* eva
 }
 
 /* Used in cclasp local calls. */
-T_O* cc_list(size_t nargs, ...) {
+T_O* cc_listSTAR(size_t nargs, core::T_O* tail, ...) {
   va_list args;
-  va_start(args, nargs);
+  va_start(args, tail);
   ql::list result;
   for (int i = 0; i < nargs; ++i) {
     T_O* tagged_obj = ENSURE_VALID_OBJECT(va_arg(args, T_O*));
     result << gc::smart_ptr<T_O>((gc::Tagged)tagged_obj);
   }
   va_end(args);
+  result.dot(gc::smart_ptr<T_O>((gc::Tagged)tail));
   return result.result().raw_();
 }
 

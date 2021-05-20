@@ -478,8 +478,8 @@
       ;; Generate a call to cc_list.
       ;; TODO: DX &rest lists.
       (%intrinsic-invoke-if-landing-pad-or-call
-       "cc_list" (list* (%size_t (length present-arguments))
-                        present-arguments))))
+       "cc_listSTAR" (list* (%size_t (length present-arguments))
+                            (%nil) present-arguments))))
 
 (defun parse-local-call-optional-arguments (nopt arguments)
   (loop repeat nopt
@@ -548,6 +548,92 @@
         ;; When the function has no environment, it can be compiled and
         ;; referenced as literal.
         (%closurette-value enclosed-function function-description))))
+
+(defun append-tmv (inputs)
+  (cond ((null inputs) (cmp:irc-make-tmv (%size_t 0) (%nil)))
+        ((not (null (rest inputs))) (values-collect-multi inputs))
+        ((and (typep (first inputs) 'bir:output)
+              (typep (bir:definition (first inputs))
+                     'bir:values-save))
+         (destructuring-bind (stackpos storage1 storage2)
+             (dynenv-storage
+              (bir:definition (first inputs)))
+           (declare (ignore stackpos))
+           (%intrinsic-call "cc_load_values" (list storage1 storage2))))
+        ((equal (cc-bmir:rtype (first inputs)) '(:object))
+         (cmp:irc-make-tmv (%size_t 1) (in (first inputs))))
+        ((listp (cc-bmir:rtype (first inputs)))
+         (fixed-to-mv (in (first inputs))))
+        (t
+         (assert (eq (cc-bmir:rtype (first inputs)) :multiple-values))
+         (in (first inputs)))))
+
+#|
+(defun variable-local-call-arguments (nreq nopt rest-id fixed variable)
+  (cond ((and (zerop nreq) (zerop nopt))
+         ;; Just the &rest parameter.
+         (cond ((null rest-id) ...)
+               ((eq rest-id :unused)
+                (list (cmp:irc-undef-value-get cmp:%t*%)))
+               (t ; cons up a &rest list
+                
+        (t
+         (assert (null fixed))
+         (if (null variable) ; no actual variable arguments - &rest list only
+             (cond ((null rest-id) nil)
+                   ((eq rest-id :unused)
+                    (list (cmp:irc-undef-value-get cmp:%t*%)))
+                   (t (list (%nil))))
+             ;; Parsing the remaining required and optional arguments is pretty
+             ;; involved. We paste all remaining arguments together in the mv
+             ;; vector, and then do a switch on the count there.
+             ;; There are possibly some situations in which this could be
+             ;; handled more efficiently, but I think the added complexity isn't
+             ;; worth it for something that only happens with rare
+             ;; multiple-value-call uses to begin with.
+             (local-mv-switch nreq nopt rest-id (append-tmv variable))))))
+
+(defmethod translate-simple-instruction ((inst cc-bmir:local-call-arguments)
+                                         (abi x86-64))
+  (let* ((callee (bir:callee inst))
+         (lambda-list (bir:lambda-list inst))
+         (callee-info (find-llvm-function-info callee))
+         (vargs (mapcar #'variable-as-argument (environment callee-info)))
+         (inputs (bir:inputs inst))
+         ;; Collect all inputs with fixed rtype until we hit an unfixed one.
+         (prefix (loop while inputs
+                       when (listp (cc-bmir:rtype (first inputs)))
+                         append (in (pop inputs))))
+         (nfargs (length prefix))
+         ;; And here are any remaining inputs, which may include both variable
+         ;; and fixed inputs, but which are headed by a variable one so there's
+         ;; at least some uncertainty.
+         (variable inputs))
+    (multiple-value-bind (req opt rest-var key-flag keyargs aok aux varest-p)
+        (cmp::process-cleavir-lambda-list lambda-list)
+      (declare (ignore keyargs aok aux))
+      (assert (and (not key-flag) (not varest-p)))
+      (let* ((nreq (car req)) (nopt (car opt))
+             (nfixed (+ nreq nopt))
+             (rest-id (cond ((null rest-var) nil)
+                            ((bir:unused-p rest-var) :unused)
+                            (t t)))
+             ;; Required arguments from the fixed.
+             (freq (subseq prefix (min nfargs nreq)))
+             ;; Optional
+             (fopt (loop with true = (cmp::irc-t)
+                         repeat nopt ; upper limit
+                         for a in (nthcdr (min nfargs nreq) prefix)
+                         collect a collect true))
+             (remaining-nreq (max (- nreq nfargs) 0)) ; req to supply from vars
+             (remaining-nopt (max (- nopt nfargs nreq) 0)))
+        (append vargs freq fopt
+                (variable-local-call-arguments
+                 remaining-nreq remaining-nopt rest-id
+                 ;; Remaining invariable arguments, if any
+                 (nthcdr nfixed prefix)
+                 variable))))))
+|#
 
 (defun gen-local-call (callee lisp-arguments)
   (let ((callee-info (find-llvm-function-info callee)))
@@ -753,6 +839,16 @@
     (assert (equal (length outputrt) ninputs))
     (out (if (= ninputs 1) (in (first inputs)) (mapcar #'in inputs)) output)))
 
+(defun fixed-to-mv (values)
+  (let ((nvalues (length values)))
+    (cond ((zerop nvalues)
+           (cmp:irc-make-tmv (%size_t nvalues) (%nil)))
+          (t
+           (loop for i from 1
+                 for v in (rest values)
+                 do (cmp:irc-store v (return-value-elt i)))
+           (cmp:irc-make-tmv (%size_t nvalues) (first values))))))
+
 (defmethod translate-simple-instruction ((instr cc-bmir:ftm) (abi abi-x86-64))
   (let* ((input (bir:input instr))
          (inputrt (cc-bmir:rtype input))
@@ -762,14 +858,7 @@
     (assert (eq outputrt :multiple-values))
     (cond ((equal inputrt '(:object))
            (out (cmp:irc-make-tmv (%size_t 1) (in input)) output))
-          ((null inputrt)
-           (out (cmp:irc-make-tmv (%size_t 0) (%nil)) output))
-          (t
-           (let ((ninputs (length inputrt))
-                 (ins (in input)))
-             (loop for i from 1 below ninputs
-                   do (cmp:irc-store (elt ins i) (return-value-elt i)))
-             (out (cmp:irc-make-tmv (%size_t ninputs) (first ins)) output))))))
+          (t (out (fixed-to-mv (in input)) output)))))
 
 (defmethod translate-simple-instruction ((instr cc-bmir:mtf) (abi abi-x86-64))
   (assert (= (length (bir:outputs instr)) 1))
@@ -986,10 +1075,10 @@
           (in (first inputs)) (in (second inputs)))
          (first (bir:outputs inst)))))
 
-(defun values-collect-multi (inst)
+(defun values-collect-multi (inputs)
   ;; First, assert that there's only one input that isn't a values-save.
   (loop with seen-non-save = nil
-        for input in (bir:inputs inst)
+        for input in inputs
         for outp = (typep input 'bir:output)
         for inst = (and outp (bir:definition input))
         if (not (or (typep inst 'bir:values-save)
@@ -1004,7 +1093,7 @@
          ;; values the extra is the primary value (since it's stored
          ;; separately)
          (data (loop for idx from 0
-                     for input in (bir:inputs inst)
+                     for input in inputs
                      for outputp = (typep input 'bir:output)
                      for inst = (and outputp (bir:definition input))
                      collect (cond ((typep inst 'bir:values-save)
@@ -1079,16 +1168,7 @@
 
 (defmethod translate-simple-instruction ((inst bir:values-collect) abi)
   (declare (ignore abi))
-  (out (if (= (length (bir:inputs inst)) 1)
-           (let* ((inp (first (bir:inputs inst)))
-                  (vs (bir:definition inp)))
-             (check-type vs bir:values-save)
-             (destructuring-bind (stackpos storage1 storage2)
-                 (dynenv-storage vs)
-               (declare (ignore stackpos))
-               (%intrinsic-call "cc_load_values" (list storage1 storage2))))
-           (values-collect-multi inst))
-       (first (bir:outputs inst))))
+  (out (append-tmv (bir:inputs inst)) (first (bir:outputs inst))))
 
 (defmethod translate-simple-instruction
     ((inst bir:load-time-value-reference) abi)

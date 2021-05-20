@@ -111,5 +111,7 @@
   (:export #:fixnump #:characterp #:consp #:single-float-p #:generalp
            #:headerq #:info)
   (:export #:memref2 #:offset #:load #:store #:cas)
+  (:export #:abstract-parse-arguments #:apa-nreq #:apa-nopt #:apa-rest
+           #:parse-fixed-arguments #:parse-mv-arguments #:pfa-nargs)
   (:export #:ftm #:mtf #:fixed-values-pad)
   (:export #:datum #:output #:phi #:rtype))
