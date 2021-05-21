@@ -25,14 +25,6 @@
   (or (bir:enclose function)
       ;; We need a XEP for more involved lambda lists.
       (lambda-list-too-hairy-p (bir:lambda-list function))
-      ;; or for mv-calls that might need to signal an error.
-      (and (cleavir-set:some (lambda (c) (typep c 'bir:mv-local-call))
-                             (bir:local-calls function))
-           (multiple-value-bind (req opt rest)
-               (cmp::process-cleavir-lambda-list
-                (bir:lambda-list function))
-             (declare (ignore opt))
-             (or (plusp (car req)) (not rest))))
       ;; Assume that a function with no enclose and no local calls is
       ;; toplevel and needs an XEP. Else it would have been removed or
       ;; deleted as it is unreferenced otherwise.
@@ -694,7 +686,7 @@
    "cc_call_multipleValueOneFormCallWithRet0"
    (list (enclose callee-info :dynamic nil) tmv)))
 
-(defun direct-mv-local-call (tmv callee-info nreq nopt rest-var)
+(defun direct-mv-local-call (tmv callee-info name nreq nopt rest-var)
   (let* ((rnret (cmp:irc-tmv-nret tmv))
          (rprimary (cmp:irc-tmv-primary tmv))
          (nfixed (+ nreq nopt))
@@ -731,11 +723,16 @@
         ;; Generate the mismatch block, if it exists.
         (when mismatch
           (cmp:irc-begin-block mismatch)
-          (cmp::irc-intrinsic-call-or-invoke
-           "cc_wrong_number_of_arguments"
-           (list (enclose callee-info :indefinite nil) rnret
-                 (%size_t nreq) (%size_t nfixed)))
-          (cmp:irc-unreachable))
+          (let* ((lit (literal:reference-literal name t))
+                 ;; FIXME: Do this at higher level as a constant-reference
+                 ;; thereby avoiding code duplication
+                 (vala (cmp:irc-gep-variable (literal:ltv-global)
+                                             (list (%size_t 0) (%i64 lit))))
+                 (val (cmp:irc-load vala)))
+            (cmp::irc-intrinsic-call-or-invoke
+             "cc_wrong_number_of_arguments"
+             (list val rnret (%size_t nreq) (%size_t nfixed)))
+            (cmp:irc-unreachable)))
         ;; Generate not-enough-args cases.
         (loop for i below nreq
               do (cmp:irc-add-case sw (%size_t i) mismatch))
@@ -792,7 +789,7 @@
       (out (if (or key-flag varest-p)
                (general-mv-local-call callee-info tmv)
                (direct-mv-local-call
-                tmv callee-info (car req) (car opt) rest-var))
+                tmv callee-info (bir:name callee) (car req) (car opt) rest-var))
            output))))
 
 (defmethod translate-simple-instruction ((instruction bir:mv-call) abi)

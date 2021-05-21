@@ -567,8 +567,8 @@ extern "C" {
 // FIXME: This should be [[noreturn]], but I'm not sure how to communicate to clang that the
 // error calls won't return, so it complains if that's declared.
 NOINLINE void cc_wrong_number_of_arguments(core::T_O* tfunction, std::size_t nargs,
-                                                        std::size_t min, std::size_t max) {
-  Function_sp function((gctools::Tagged)tfunction);
+                                           std::size_t min, std::size_t max) {
+  T_sp function((gctools::Tagged)tfunction);
   /* This is kind of a KLUDGE, but we use a smaller max to indicate there is no
    * limit on the number of arguments (i.e., &rest or &key).
    * Check how calls to this function are generated in cmp/arguments.lsp. */

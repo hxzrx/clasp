@@ -936,7 +936,10 @@ The conflict resolver must be one of ~s" chosen-symbol candidates))
 (define-condition core:wrong-number-of-arguments (program-error)
   (;; may be NIL if this is called from the interpreter and we don't know anything
    ;; (KLUDGE, FIXME?)
-   (called-function :initform nil :initarg :called-function :reader called-function)
+   (called-function :initform nil :initarg :called-function
+                    :reader called-function
+                    ;; Can be a function or just a function's name.
+                    :type (or function symbol))
    (given-nargs :initarg :given-nargs :reader given-nargs)
    ;; also may be NIL, same reason (KLUDGE, FIXME?)
    (min-nargs :initarg :min-nargs :reader min-nargs :initform nil)
@@ -946,8 +949,12 @@ The conflict resolver must be one of ~s" chosen-symbol candidates))
              (let* ((min (min-nargs condition))
                     (max (max-nargs condition))
                     (function (called-function condition))
-                    (name (and function (core:function-name function)))
-                    (dname (if (eq name 'cl:lambda) "anonymous function" name)))
+                    (name (if (functionp function)
+                              (core:function-name function)
+                              function))
+                    (dname (cond ((eq name 'cl:lambda) "anonymous function")
+                                 ((null name) "unknown function")
+                                 (t name))))
                (format stream "~@[Calling ~a - ~]Got ~d arguments, but expected ~@?"
                        dname (given-nargs condition)
                        (cond ((null max)  "at least ~d")
