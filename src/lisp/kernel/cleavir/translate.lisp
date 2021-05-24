@@ -560,19 +560,19 @@
          (assert (eq (cc-bmir:rtype (first inputs)) :multiple-values))
          (in (first inputs)))))
 
-#|
 (defun gen-check-for-rest (fname min max nargs variable)
   ;; No &rest, so we might have to signal too-many-arguments.
   ;; We can know statically that there will always be an error
   ;; if there are any fixed arguments at all, but we let LLVM
   ;; figure that out with constant folding (hopefully) rather than
   ;; detect it ourselves.
-  (let* ((sum (loop with so-far = (%size_t (length fixed))
-                    for inp in variable
+  (let* ((sum (loop for inp in variable
                     for insize
                       = (cond ((and (typep inp 'bir:output)
-                                    (typep (definition inp) 'bir:values-save))
-                               (nth-value 1 (dynenv-storage (definition inp))))
+                                    (typep (bir:definition inp)
+                                           'bir:values-save))
+                               (nth-value 1 (dynenv-storage
+                                             (bir:definition inp))))
                               ((listp (cc-bmir:rtype inp))
                                (%size_t (length (cc-bmir:rtype inp))))
                               (t (cmp:irc-tmv-nret (in inp))))
@@ -589,16 +589,23 @@
       (%intrinsic-invoke-if-landing-pad-or-call "cc_wrong_number_of_arguments"
                                                 (list val sum min max))
       (cmp:irc-unreachable))
-    (cmp:irc-begin-block just-right)
-    ;; List of parameters for the local call - none, obviously
-    nil))
+    (cmp:irc-begin-block just-right)))
+
+(defun variable-rest-list (inputs)
+  ;; Should be more sophisticated later, e.g. elide values-list calls
+  (let ((tmv (append-tmv inputs)))
+    (%intrinsic-invoke-if-landing-pad-or-call
+     "cc_mvc_GatherRest" (list (cmp:irc-tmv-nret tmv)
+                               (cmp:irc-tmv-primary tmv)
+                               (%size_t 0)))))
 
 (defun variable-local-call-arguments (nreq nopt rest-id name fixed variable)
   (cond ((and (zerop nreq) (zerop nopt))
          ;; Just the &rest parameter.
          (cond ((null rest-id)
                 (gen-check-for-rest name nreq (+ nreq nopt)
-                                    (%size_t (length fixed)) variable))
+                                    (%size_t (length fixed)) variable)
+                nil)
                ((eq rest-id :unused)
                 (list (cmp:irc-undef-value-get cmp:%t*%)))
                (t ; cons up a &rest list
@@ -628,7 +635,7 @@
              (local-mv-switch (append-tmv variable) name nreq nopt rest-id)))))
 
 (defmethod translate-simple-instruction ((inst cc-bmir:local-call-arguments)
-                                         (abi x86-64))
+                                         (abi abi-x86-64))
   (let* ((callee (bir:callee inst))
          (lambda-list (bir:lambda-list inst))
          (callee-info (find-llvm-function-info callee))
@@ -668,7 +675,6 @@
                  ;; Remaining invariable arguments, if any
                  (nthcdr nfixed prefix)
                  variable))))))
-|#
 
 (defun gen-local-call (callee lisp-arguments)
   (let ((callee-info (find-llvm-function-info callee)))
@@ -1175,7 +1181,7 @@
         (let* ((spos (nth (1- liven) partial-sums))
                (sdest (cmp:irc-gep-variable valvec (list spos)))
                ;; Add one, since we store the primary separately
-               (dest (%gep cmp:%t**% valvec '(1))))
+               (dest (%gep cmp:%t**% sdest '(1))))
           ;; Store the primary
           (cmp:irc-store primary (cmp:irc-gep-variable valvec (list spos)))
           ;; Copy the rest
