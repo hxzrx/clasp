@@ -561,14 +561,56 @@
          (in (first inputs)))))
 
 #|
-(defun variable-local-call-arguments (nreq nopt rest-id fixed variable)
+(defun gen-check-for-rest (fname min max nargs variable)
+  ;; No &rest, so we might have to signal too-many-arguments.
+  ;; We can know statically that there will always be an error
+  ;; if there are any fixed arguments at all, but we let LLVM
+  ;; figure that out with constant folding (hopefully) rather than
+  ;; detect it ourselves.
+  (let* ((sum (loop with so-far = (%size_t (length fixed))
+                    for inp in variable
+                    for insize
+                      = (cond ((and (typep inp 'bir:output)
+                                    (typep (definition inp) 'bir:values-save))
+                               (nth-value 1 (dynenv-storage (definition inp))))
+                              ((listp (cc-bmir:rtype inp))
+                               (%size_t (length (cc-bmir:rtype inp))))
+                              (t (cmp:irc-tmv-nret (in inp))))
+                    do (setf nargs (cmp:irc-add nargs insize))))
+         (too-many (cmp:irc-basic-block-create "local-too-many-args"))
+         (just-right (cmp:irc-basic-block-create "local-enough-args"))
+         (test (cmp:irc-icmp-eq sum (%size_t 0))))
+    (cmp:irc-cond-br test just-right too-many)
+    (cmp:irc-begin-block too-many)
+    (let* ((lit (literal:reference-literal fname t))
+           (vala (cmp:irc-gep-variable (literal:ltv-global)
+                                       (list (%size_t 0) (%i64 lit))))
+           (val (cmp:irc-load vala)))
+      (%intrinsic-invoke-if-landing-pad-or-call "cc_wrong_number_of_arguments"
+                                                (list val sum min max))
+      (cmp:irc-unreachable))
+    (cmp:irc-begin-block just-right)
+    ;; List of parameters for the local call - none, obviously
+    nil))
+
+(defun variable-local-call-arguments (nreq nopt rest-id name fixed variable)
   (cond ((and (zerop nreq) (zerop nopt))
          ;; Just the &rest parameter.
-         (cond ((null rest-id) ...)
+         (cond ((null rest-id)
+                (gen-check-for-rest name nreq (+ nreq nopt)
+                                    (%size_t (length fixed)) variable))
                ((eq rest-id :unused)
                 (list (cmp:irc-undef-value-get cmp:%t*%)))
                (t ; cons up a &rest list
-                
+                (list
+                 (if (null variable)
+                     (gen-rest-list fixed)
+                     (let ((rl (variable-rest-list variable)))
+                       (if (null fixed)
+                           rl
+                           (%intrinsic-invoke-if-landing-pad-or-call
+                            "cc_listSTAR" (list* (%size_t (length fixed))
+                                                 rl fixed)))))))))
         (t
          (assert (null fixed))
          (if (null variable) ; no actual variable arguments - &rest list only
@@ -583,7 +625,7 @@
              ;; handled more efficiently, but I think the added complexity isn't
              ;; worth it for something that only happens with rare
              ;; multiple-value-call uses to begin with.
-             (local-mv-switch nreq nopt rest-id (append-tmv variable))))))
+             (local-mv-switch (append-tmv variable) name nreq nopt rest-id)))))
 
 (defmethod translate-simple-instruction ((inst cc-bmir:local-call-arguments)
                                          (abi x86-64))
@@ -618,10 +660,11 @@
                          for a in (nthcdr (min nfargs nreq) prefix)
                          collect a collect true))
              (remaining-nreq (max (- nreq nfargs) 0)) ; req to supply from vars
-             (remaining-nopt (max (- nopt nfargs nreq) 0)))
+             (remaining-nopt (max (- nopt (- nfargs nreq)) 0)))
         (append vargs freq fopt
                 (variable-local-call-arguments
                  remaining-nreq remaining-nopt rest-id
+                 (bir:name callee)
                  ;; Remaining invariable arguments, if any
                  (nthcdr nfixed prefix)
                  variable))))))
@@ -686,19 +729,21 @@
    "cc_call_multipleValueOneFormCallWithRet0"
    (list (enclose callee-info :dynamic nil) tmv)))
 
-(defun direct-mv-local-call (tmv callee-info name nreq nopt rest-var)
+;;; Given a T_mv reference and a lambda list shape, generate code to compute
+;;; the arguments for that lambda list from those values.
+;;; Returns a list of LLVM values, the arguments for the lambda list.
+(defun local-mv-switch (tmv name nreq nopt rest-id)
   (let* ((rnret (cmp:irc-tmv-nret tmv))
          (rprimary (cmp:irc-tmv-primary tmv))
          (nfixed (+ nreq nopt))
          (mismatch
-           (unless (and (zerop nreq) rest-var)
+           (unless (and (zerop nreq) rest-id)
              (cmp:irc-basic-block-create "lmvc-arg-mismatch")))
-         (mte (if rest-var
+         (mte (if rest-id
                   (cmp:irc-basic-block-create "lmvc-more-than-enough")
                   mismatch))
          (merge (cmp:irc-basic-block-create "lmvc-after"))
-         (sw (cmp:irc-switch rnret mte (+ 1 nreq nopt)))
-         (environment (environment callee-info)))
+         (sw (cmp:irc-switch rnret mte (+ 1 nreq nopt))))
     (labels ((load-return-value (n)
                (if (zerop n)
                    rprimary
@@ -716,9 +761,8 @@
                     collect (cmp:irc-phi cmp:%t*% (1+ nopt))
                     collect (cmp:irc-phi cmp:%t*% (1+ nopt))))
             (rest-phi
-              (cond ((null rest-var) nil)
-                    ((bir:unused-p rest-var)
-                     (cmp:irc-undef-value-get cmp:%t*%))
+              (cond ((null rest-id) nil)
+                    ((eq rest-id :unused) (cmp:irc-undef-value-get cmp:%t*%))
                     (t (cmp:irc-phi cmp:%t*% (1+ nopt))))))
         ;; Generate the mismatch block, if it exists.
         (when mismatch
@@ -745,36 +789,40 @@
                  (loop for phi in opt-phis
                        for val in (optionals i)
                        do (cmp:irc-phi-add-incoming phi val b))
-                 (when (and rest-var
-                            (not (bir:unused-p rest-var)))
+                 (when (and rest-id (not (eq :unused rest-id)))
                    (cmp:irc-phi-add-incoming rest-phi (%nil) b))
                  (cmp:irc-br merge))
         ;; If there's a &rest, generate the more-than-enough arguments case.
-        (when rest-var
+        (when rest-id
           (cmp:irc-begin-block mte)
           (loop for phi in opt-phis
                 for val in (optionals nopt)
                 do (cmp:irc-phi-add-incoming phi val mte))
-          (unless (bir:unused-p rest-var)
+          (unless (eq rest-id :unused)
             (cmp:irc-phi-add-incoming
              rest-phi
              (%intrinsic-invoke-if-landing-pad-or-call
               "cc_mvcGatherRest" (list rnret rprimary (%size_t nfixed)))
-           mte))
-        (cmp:irc-br merge))
-      ;; Generate the call, in the merge block.
-      (cmp:irc-begin-block merge)
-      (let* ((arguments
-               (nconc
-                (mapcar #'variable-as-argument environment)
-                (loop for j below nreq collect (load-return-value j))
-                opt-phis
-                (when rest-var (list rest-phi))))
-             (function (main-function callee-info))
-             (call
-               (cmp::irc-call-or-invoke function arguments)))
-        (llvm-sys:set-calling-conv call 'llvm-sys:fastcc)
-        call)))))
+             mte))
+          (cmp:irc-br merge))
+        ;; Generate the call, in the merge block.
+        (cmp:irc-begin-block merge)
+        (nconc (loop for j below nreq collect (load-return-value j))
+               opt-phis
+               (when rest-id (list rest-phi)))))))
+
+(defun direct-mv-local-call (tmv callee-info name nreq nopt rest-var)
+  (let* ((arguments (local-mv-switch tmv name nreq nopt
+                                     (cond ((null rest-var) nil)
+                                           ((bir:unused-p rest-var) :unused)
+                                           (t t))))
+         (environment (environment callee-info))
+         (rarguments
+           (nconc (mapcar #'variable-as-argument environment) arguments))
+         (function (main-function callee-info))
+         (call (cmp::irc-call-or-invoke function rarguments)))
+    (llvm-sys:set-calling-conv call 'llvm-sys:fastcc)
+    call))
 
 (defmethod translate-simple-instruction
     ((instruction bir:mv-local-call) abi)
