@@ -600,6 +600,9 @@
                                (%size_t 0)))))
 
 (defun variable-local-call-arguments (nreq nopt rest-id name fixed variable)
+  #+(or)
+  (format t "~&variable-local-call-arguments ~a"
+          (list nreq nopt rest-id name fixed variable))
   (cond ((and (zerop nreq) (zerop nopt))
          ;; Just the &rest parameter.
          (cond ((null rest-id)
@@ -620,36 +623,36 @@
                                                  rl fixed)))))))))
         (t
          (assert (null fixed))
-         (if (null variable) ; no actual variable arguments - &rest list only
-             (cond ((null rest-id) nil)
-                   ((eq rest-id :unused)
-                    (list (cmp:irc-undef-value-get cmp:%t*%)))
-                   (t (list (%nil))))
-             ;; Parsing the remaining required and optional arguments is pretty
-             ;; involved. We paste all remaining arguments together in the mv
-             ;; vector, and then do a switch on the count there.
-             ;; There are possibly some situations in which this could be
-             ;; handled more efficiently, but I think the added complexity isn't
-             ;; worth it for something that only happens with rare
-             ;; multiple-value-call uses to begin with.
-             (local-mv-switch (append-tmv variable) name nreq nopt rest-id)))))
+         ;; Parsing the remaining required and optional arguments is pretty
+         ;; involved. We paste all remaining arguments together in the mv
+         ;; vector, and then do a switch on the count there.
+         ;; There are possibly some situations in which this could be
+         ;; handled more efficiently, but I think the added complexity isn't
+         ;; worth it for something that only happens with rare
+         ;; multiple-value-call uses to begin with.
+         (local-mv-switch (append-tmv variable) name nreq nopt rest-id))))
 
 (defmethod translate-simple-instruction ((inst cc-bmir:local-call-arguments)
                                          (abi abi-x86-64))
   (let* ((callee (bir:callee inst))
-         (lambda-list (bir:lambda-list inst))
+         (lambda-list (bir:lambda-list callee))
          (callee-info (find-llvm-function-info callee))
          (vargs (mapcar #'variable-as-argument (environment callee-info)))
          (inputs (bir:inputs inst))
          ;; Collect all inputs with fixed rtype until we hit an unfixed one.
-         (prefix (loop while inputs
-                       when (listp (cc-bmir:rtype (first inputs)))
-                         append (in (pop inputs))))
+         (prefix (loop while (and inputs
+                                  (listp (cc-bmir:rtype (first inputs))))
+                       if (= (length (cc-bmir:rtype (first inputs))) 1)
+                         collect (in (pop inputs))
+                       else append (in (pop inputs))))
          (nfargs (length prefix))
          ;; And here are any remaining inputs, which may include both variable
          ;; and fixed inputs, but which are headed by a variable one so there's
          ;; at least some uncertainty.
          (variable inputs))
+    #+(or)
+    (format t "~&local-call-arguments ~a~%"
+            (list lambda-list vargs prefix variable (mapcar #'bir:definitions (bir:inputs inst))))
     (multiple-value-bind (req opt rest-var key-flag keyargs aok aux varest-p)
         (cmp::process-cleavir-lambda-list lambda-list)
       (declare (ignore keyargs aok aux))
@@ -660,21 +663,26 @@
                             ((bir:unused-p rest-var) :unused)
                             (t t)))
              ;; Required arguments from the fixed.
-             (freq (subseq prefix (min nfargs nreq)))
+             (nfreq (min nfargs nreq))
+             (freq (subseq prefix 0 nfreq))
              ;; Optional
+             (nfopt (min (- nfargs nfreq) nopt))
              (fopt (loop with true = (cmp::irc-t)
                          repeat nopt ; upper limit
-                         for a in (nthcdr (min nfargs nreq) prefix)
+                         for a in (nthcdr nfreq prefix)
                          collect a collect true))
-             (remaining-nreq (max (- nreq nfargs) 0)) ; req to supply from vars
-             (remaining-nopt (max (- nopt (- nfargs nreq)) 0)))
-        (append vargs freq fopt
-                (variable-local-call-arguments
-                 remaining-nreq remaining-nopt rest-id
-                 (bir:name callee)
-                 ;; Remaining invariable arguments, if any
-                 (nthcdr nfixed prefix)
-                 variable))))))
+             (remaining-nreq (- nreq nfreq)) ; req to supply from vars
+             (remaining-nopt (- nopt nfopt)))
+        (assert (= (+ (length freq) remaining-nreq) nreq))
+        (assert (= (+ (floor (length fopt) 2) remaining-nopt) nopt))
+        (out (append vargs freq fopt
+                     (variable-local-call-arguments
+                      remaining-nreq remaining-nopt rest-id
+                      (bir:name callee)
+                      ;; Remaining invariable arguments, if any
+                      (nthcdr nfixed prefix)
+                      variable))
+             (bir:output inst))))))
 
 (defmethod translate-simple-instruction ((instruction cc-bmir:fake-local-call)
                                          abi)
@@ -811,25 +819,17 @@
 (defmethod translate-simple-instruction
     ((instruction cc-bmir:real-mv-local-call) abi)
   (declare (ignore abi))
-  (let* ((callee (bir:callee instruction))
+  (let* ((ainput (second (bir:inputs instruction)))
+         (rarguments (in ainput))
+         (arguments (if (equal (cc-bmir:rtype ainput) '(:object))
+                        (list rarguments)
+                        rarguments))
+         (callee (bir:callee instruction))
          (callee-info (find-llvm-function-info callee))
-         (tmv (in (second (bir:inputs instruction)))))
-    (multiple-value-bind (req opt rest-var key-flag keyargs aok aux varest-p)
-        (cmp::process-cleavir-lambda-list (bir:lambda-list callee))
-      (declare (ignore keyargs aok aux))
-      (assert (and (not key-flag) (not varest-p)))
-      (let* ((rest-id (cond ((null rest-var) nil)
-                            ((bir:unused-p rest-var) :unused)
-                            (t t)))
-             (arguments (local-mv-switch tmv (bir:name callee)
-                                         (car req) (car opt) rest-id))
-             (environment
-               (mapcar #'variable-as-argument (environment callee-info)))
-             (rarguments (nconc environment arguments))
-             (function (main-function callee-info))
-             (call (cmp::irc-call-or-invoke function rarguments)))
-        (llvm-sys:set-calling-conv call 'llvm-sys:fastcc)
-        (out call (bir:output instruction))))))
+         (function (main-function callee-info))
+         (call (cmp::irc-call-or-invoke function arguments)))
+    (llvm-sys:set-calling-conv call 'llvm-sys:fastcc)
+    (out call (bir:output instruction))))
 
 (defmethod translate-simple-instruction
     ((instruction cc-bmir:fake-mv-local-call) abi)
