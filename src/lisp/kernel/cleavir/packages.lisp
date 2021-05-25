@@ -102,7 +102,8 @@
   (:local-nicknames (#:bir #:cleavir-bir))
   (:export #:reduce-module-typeqs)
   (:export #:reduce-module-primops)
-  (:export #:assign-module-rtypes #:insert-values-coercion-into-module))
+  (:export #:assign-module-rtypes #:insert-values-coercion-into-module)
+  (:export #:lower-local-calls))
 
 (defpackage #:clasp-cleavir-bmir
   (:nicknames #:cc-bmir)
@@ -111,6 +112,7 @@
   (:export #:fixnump #:characterp #:consp #:single-float-p #:generalp
            #:headerq #:info)
   (:export #:memref2 #:offset #:load #:store #:cas)
-  (:export #:local-call-arguments)
+  (:export #:local-call-arguments #:real-local-call #:fake-local-call
+           #:real-mv-local-call #:fake-mv-local-call)
   (:export #:ftm #:mtf #:fixed-values-pad)
   (:export #:datum #:output #:phi #:rtype))

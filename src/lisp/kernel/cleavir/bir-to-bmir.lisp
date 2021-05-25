@@ -149,6 +149,12 @@
 (defmethod %use-rtype ((inst bir:mv-local-call) (datum bir:datum))
   (if (member datum (rest (bir:inputs inst)))
       :multiple-values '(:object)))
+(defmethod %use-rtype ((inst cc-bmir:real-mv-local-call) (datum bir:datum))
+  (if (member datum (rest (bir:inputs inst)))
+      :multiple-values '(:object)))
+(defmethod %use-rtype ((inst cc-bmir:fake-mv-local-call) (datum bir:datum))
+  (if (member datum (rest (bir:inputs inst)))
+      :multiple-values '(:object)))
 (defmethod %use-rtype ((inst bir:returni) (datum bir:datum)) :multiple-values)
 (defmethod %use-rtype ((inst bir:values-save) (datum bir:datum))
   (use-rtype (bir:output inst)))
@@ -377,6 +383,12 @@
 (defmethod insert-values-coercion ((instruction bir:mv-local-call))
   (maybe-insert-ftms instruction (rest (bir:inputs instruction)))
   (maybe-insert-mtf instruction (first (bir:outputs instruction))))
+(defmethod insert-values-coercion ((instruction cc-bmir:real-mv-local-call))
+  (maybe-insert-ftms instruction (rest (bir:inputs instruction)))
+  (maybe-insert-mtf instruction (first (bir:outputs instruction))))
+(defmethod insert-values-coercion ((instruction cc-bmir:fake-mv-local-call))
+  (maybe-insert-ftms instruction (rest (bir:inputs instruction)))
+  (maybe-insert-mtf instruction (first (bir:outputs instruction))))
 (defmethod insert-values-coercion ((instruction cc-bir:mv-foreign-call))
   (object-inputs instruction)
   (maybe-insert-mtf instruction (first (bir:outputs instruction))))
@@ -417,3 +429,44 @@
 
 (defun insert-values-coercion-into-module (module)
   (bir:map-functions #'insert-values-coercion-into-function module))
+
+;;;
+
+(defgeneric lower-local-call (call hairyp))
+
+(defmethod lower-local-call ((call bir:local-call) (hairyp null))
+  (change-class call 'cc-bmir:real-local-call))
+(defmethod lower-local-call ((call bir:local-call) hairyp)
+  (declare (ignore hairyp))
+  (change-class call 'cc-bmir:fake-local-call))
+(defmethod lower-local-call ((call bir:mv-local-call) (hairyp null))
+  #+(or)
+  (let ((callee (bir:callee call))
+        (arginputs (rest (bir:inputs call))))
+    (setf (bir:inputs call) (list callee))
+    (let* ((parsed (make-instance 'bir:output))
+           (parse (make-instance 'cc-bmir:local-call-arguments
+                    :callee (bir:callee call) :inputs arginputs
+                    :outputs (list parsed))))
+      (bir:insert-instruction-before parse call)
+      (setf (bir:inputs call) (list callee parsed))))
+  (change-class call 'cc-bmir:real-mv-local-call))
+(defmethod lower-local-call ((call bir:mv-local-call) hairyp)
+  (declare (ignore hairyp))
+  (change-class call 'cc-bmir:fake-mv-local-call))
+
+;;; FIXME: duplicate code
+(defun lambda-list-too-hairy-p (lambda-list)
+  (multiple-value-bind (reqargs optargs rest-var
+                        key-flag keyargs aok aux varest-p)
+      (cmp::process-cleavir-lambda-list lambda-list)
+    (declare (ignore reqargs optargs rest-var keyargs aok aux))
+    (or key-flag varest-p)))
+
+(defun lower-function-local-calls (function)
+  (let ((hairyp (lambda-list-too-hairy-p (bir:lambda-list function))))
+    (cleavir-set:doset (call (bir:local-calls function))
+      (lower-local-call call hairyp))))
+
+(defun lower-local-calls (module)
+  (bir:map-functions #'lower-function-local-calls module))

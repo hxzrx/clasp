@@ -676,50 +676,46 @@
                  (nthcdr nfixed prefix)
                  variable))))))
 
-(defun gen-local-call (callee lisp-arguments)
-  (let ((callee-info (find-llvm-function-info callee)))
-    (cond ((lambda-list-too-hairy-p (bir:lambda-list callee))
-           ;; Has &key or something, so use the normal call protocol.
-           ;; We allocate a fresh closure for every call. Hopefully this
-           ;; isn't too expensive. We can always use stack allocation since
-           ;; there's no possibility of this closure being stored in a closure
-           ;; (If we local-call a self-referencing closure, the closure cell
-           ;;  will get its value from some enclose.
-           ;;  FIXME we could use that instead?)
-           (closure-call-or-invoke
-            (enclose callee-info :dynamic nil)
-            (mapcar #'in lisp-arguments)))
-          (t
-           ;; Call directly.
-           ;; Note that Cleavir doesn't make local-calls if there's an
-           ;; argcount mismatch, so we don't need to sweat that.
-           (multiple-value-bind (req opt rest-var key-flag keyargs aok aux
-                                 varest-p)
-               (cmp::process-cleavir-lambda-list (bir:lambda-list callee))
-             (declare (ignore keyargs aok aux))
-             (assert (and (not key-flag) (not varest-p)))
-             (let* ((rest-id (cond ((null rest-var) nil)
-                                   ((bir:unused-p rest-var) :unused)
-                                   (t t)))
-                    (subargs
-                      (parse-local-call-arguments
-                       (car req) (car opt) rest-id
-                       (mapcar #'in lisp-arguments)))
-                    (args (append (mapcar #'variable-as-argument
-                                          (environment callee-info))
-                                  subargs))
-                    (function (main-function callee-info))
-                    (result-in-registers
-                      (cmp::irc-call-or-invoke function args)))
-               (llvm-sys:set-calling-conv result-in-registers 'llvm-sys:fastcc)
-               result-in-registers))))))
-
-(defmethod translate-simple-instruction ((instruction bir:local-call)
+(defmethod translate-simple-instruction ((instruction cc-bmir:fake-local-call)
                                          abi)
   (declare (ignore abi))
-  (out (gen-local-call (bir:callee instruction)
-                       (rest (bir:inputs instruction)))
-       (first (bir:outputs instruction))))
+  (out (closure-call-or-invoke
+        (enclose (find-llvm-function-info (bir:callee instruction))
+                 :dynamic nil)
+        (mapcar #'in (rest (bir:inputs instruction))))
+       (bir:output instruction)))
+
+(defmethod translate-simple-instruction ((instruction cc-bmir:real-local-call)
+                                         abi)
+  (declare (ignore abi))
+  (out
+   ;; Call directly.
+   ;; Note that Cleavir doesn't make local-calls if there's an
+   ;; argcount mismatch, so we don't need to sweat that.
+   (let* ((callee (bir:callee instruction))
+          (callee-info (find-llvm-function-info callee))
+          (lisp-arguments (rest (bir:inputs instruction))))
+     (multiple-value-bind (req opt rest-var key-flag keyargs aok aux
+                           varest-p)
+         (cmp::process-cleavir-lambda-list (bir:lambda-list callee))
+       (declare (ignore keyargs aok aux))
+       (assert (and (not key-flag) (not varest-p)))
+       (let* ((rest-id (cond ((null rest-var) nil)
+                             ((bir:unused-p rest-var) :unused)
+                             (t t)))
+              (subargs
+                (parse-local-call-arguments
+                 (car req) (car opt) rest-id
+                 (mapcar #'in lisp-arguments)))
+              (args (append (mapcar #'variable-as-argument
+                                    (environment callee-info))
+                            subargs))
+              (function (main-function callee-info))
+              (result-in-registers
+                (cmp::irc-call-or-invoke function args)))
+         (llvm-sys:set-calling-conv result-in-registers 'llvm-sys:fastcc)
+         result-in-registers)))
+   (bir:output instruction)))
 
 (defmethod translate-simple-instruction ((instruction bir:call) abi)
   (declare (ignore abi))
@@ -729,11 +725,6 @@
     (out (closure-call-or-invoke
           (first iinputs) (rest iinputs))
          output)))
-
-(defun general-mv-local-call (callee-info tmv)
-  (%intrinsic-invoke-if-landing-pad-or-call
-   "cc_call_multipleValueOneFormCallWithRet0"
-   (list (enclose callee-info :dynamic nil) tmv)))
 
 ;;; Given a T_mv reference and a lambda list shape, generate code to compute
 ;;; the arguments for that lambda list from those values.
@@ -817,34 +808,39 @@
                opt-phis
                (when rest-id (list rest-phi)))))))
 
-(defun direct-mv-local-call (tmv callee-info name nreq nopt rest-var)
-  (let* ((arguments (local-mv-switch tmv name nreq nopt
-                                     (cond ((null rest-var) nil)
-                                           ((bir:unused-p rest-var) :unused)
-                                           (t t))))
-         (environment (environment callee-info))
-         (rarguments
-           (nconc (mapcar #'variable-as-argument environment) arguments))
-         (function (main-function callee-info))
-         (call (cmp::irc-call-or-invoke function rarguments)))
-    (llvm-sys:set-calling-conv call 'llvm-sys:fastcc)
-    call))
-
 (defmethod translate-simple-instruction
-    ((instruction bir:mv-local-call) abi)
+    ((instruction cc-bmir:real-mv-local-call) abi)
   (declare (ignore abi))
-  (let* ((output (first (bir:outputs instruction)))
-         (callee (bir:callee instruction))
+  (let* ((callee (bir:callee instruction))
          (callee-info (find-llvm-function-info callee))
          (tmv (in (second (bir:inputs instruction)))))
     (multiple-value-bind (req opt rest-var key-flag keyargs aok aux varest-p)
         (cmp::process-cleavir-lambda-list (bir:lambda-list callee))
       (declare (ignore keyargs aok aux))
-      (out (if (or key-flag varest-p)
-               (general-mv-local-call callee-info tmv)
-               (direct-mv-local-call
-                tmv callee-info (bir:name callee) (car req) (car opt) rest-var))
-           output))))
+      (assert (and (not key-flag) (not varest-p)))
+      (let* ((rest-id (cond ((null rest-var) nil)
+                            ((bir:unused-p rest-var) :unused)
+                            (t t)))
+             (arguments (local-mv-switch tmv (bir:name callee)
+                                         (car req) (car opt) rest-id))
+             (environment
+               (mapcar #'variable-as-argument (environment callee-info)))
+             (rarguments (nconc environment arguments))
+             (function (main-function callee-info))
+             (call (cmp::irc-call-or-invoke function rarguments)))
+        (llvm-sys:set-calling-conv call 'llvm-sys:fastcc)
+        (out call (bir:output instruction))))))
+
+(defmethod translate-simple-instruction
+    ((instruction cc-bmir:fake-mv-local-call) abi)
+  (declare (ignore abi))
+  (let* ((callee (bir:callee instruction))
+         (callee-info (find-llvm-function-info callee))
+         (tmv (in (second (bir:inputs instruction)))))
+    (out (%intrinsic-invoke-if-landing-pad-or-call
+          "cc_call_multipleValueOneFormCallWithRet0"
+          (list (enclose callee-info :dynamic nil) tmv))
+         (bir:output instruction))))
 
 (defmethod translate-simple-instruction ((instruction bir:mv-call) abi)
   (declare (ignore abi))
@@ -1603,6 +1599,7 @@ COMPILE-FILE will use the default *clasp-env*."
   (cc-bir-to-bmir:reduce-module-typeqs module)
   (cc-bir-to-bmir:reduce-module-primops module)
   (bir-transformations:module-generate-type-checks module)
+  (cc-bir-to-bmir:lower-local-calls module)
   (cc-bir-to-bmir:assign-module-rtypes module)
   (cc-bir-to-bmir:insert-values-coercion-into-module module)
   ;; These should happen last since they are like "post passes" which

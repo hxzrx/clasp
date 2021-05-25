@@ -38,7 +38,12 @@
 
 ;;; Lowered version of a local call. Two inputs, the callee and the output of
 ;;; a local-call-arguments instruction.
-(defclass local-call (bir:one-output bir:instruction) ())
+(defclass real-local-call (bir:local-call) ())
+(defclass real-mv-local-call (bir:mv-local-call) ())
+
+;;; Local calls that work with closures.
+(defclass fake-local-call (bir:local-call) ())
+(defclass fake-mv-local-call (bir:mv-local-call) ())
 
 ;;;
 
