@@ -53,7 +53,7 @@ Generally you can report problems in two fashions, either by [opening an issue t
 * Patience.
 
 ## IRC
-Clasp has an IRC channel on [Freenode](https://freenode.net/) called [#clasp](irc://irc.freenode.net/#clasp). If you have questions, problems, suggestions, or generally would like to just hang out with us devs, come and stop by!
+Clasp has an IRC channel on [Libera](https://libera.chat/) called [#clasp](irc://irc.libera.chat/#clasp). If you have questions, problems, suggestions, or generally would like to just hang out with us devs, come and stop by!
 
 ## More on Clasp
 For more information on Clasp and the discussion around it, see the following sites:
