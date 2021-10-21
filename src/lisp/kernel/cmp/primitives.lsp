@@ -207,6 +207,8 @@
          (primitive         "llvm.sadd.with.overflow.i64" :{i64.i1} (list :i64 :i64))
          (primitive         "llvm.ssub.with.overflow.i32" :{i32.i1} (list :i32 :i32))
          (primitive         "llvm.ssub.with.overflow.i64" :{i64.i1} (list :i64 :i64))
+         (primitive         "cc_coerce_to_single" :single-float (list :t*))
+         (primitive         "cc_coerce_to_double" :double-float (list :t*))
          ;; NOTE: FP primitives may signal a floating point exception but this
          ;; is not the same as raising an exception. I think. FIXME: Check.
          (primitive         "llvm.cos.f32" :single-float (list :single-float))

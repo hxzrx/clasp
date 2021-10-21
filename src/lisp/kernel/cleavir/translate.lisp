@@ -1191,12 +1191,13 @@
               for dat
                 = (cond ((eq rt :multiple-values)
                          (cmp:irc-phi cmp::%tmv% ndefinitions))
-                        ((equal rt '(:object))
-                         (cmp:irc-phi cmp:%t*% ndefinitions))
-                        ((and (listp rt)
-                              (every (lambda (x) (eq x :object)) rt))
-                         (loop repeat (length rt)
-                               collect (cmp:irc-phi cmp:%t*% ndefinitions)))
+                        ((listp rt)
+                         (if (= (length rt) 1)
+                             (cmp:irc-phi (vrtype->llvm (first rt))
+                                          ndefinitions)
+                             (loop for vrt in rt
+                                   collect (cmp:irc-phi (vrtype->llvm vrt)
+                                                        ndefinitions))))
                         (t (error "BUG: Bad rtype ~a" rt)))
               do (setf (gethash phi *datum-values*) dat))))))
 

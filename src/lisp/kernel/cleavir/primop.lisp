@@ -262,6 +262,13 @@
     (assert (llvm-sys:type-equal (llvm-sys:get-type arg) cmp:%double%))
     (%fptrunc arg cmp:%float%)))
 
+(defvprimop core::real-to-double ((:double-float) :object) (inst)
+  (assert (= 1 (length (bir:inputs inst))))
+  (%intrinsic-call "cc_coerce_to_double" (list (in (first (bir:inputs inst))))))
+(defvprimop core::real-to-single ((:single-float) :object) (inst)
+  (assert (= 1 (length (bir:inputs inst))))
+  (%intrinsic-call "cc_coerce_to_single" (list (in (first (bir:inputs inst))))))
+
 (defvprimop-intrinsic core::sf-vref ((:single-float) :object :object)
   "cc_simpleFloatVectorAref")
 (defvprimop-intrinsic core::df-vref ((:double-float) :object :object)

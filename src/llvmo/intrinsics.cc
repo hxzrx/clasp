@@ -254,6 +254,20 @@ ALWAYS_INLINE core::T_O *cc_stack_enclose(void* closure_address,
 };
 
 extern "C" {
+/* These functions are called by the runtime to implement CL:FLOAT without
+ * boxing the result.
+ */
+float cc_coerce_to_single(core::T_O* num) {
+  T_sp tnum((gctools::Tagged)num);
+  return clasp_to_float(gc::As<Real_sp>(tnum));
+}
+double cc_coerce_to_double(core::T_O* num) {
+  T_sp tnum((gctools::Tagged)num);
+  return clasp_to_double(gc::As<Real_sp>(tnum));
+}
+}; // extern "C"
+
+extern "C" {
 /* These functions are called by the runtime when the compiler wants to unbox
  * things. Unlike the FLI translators below, they are not permissive, in that
  * they will signal a type error if given anything but the particular type that's
@@ -800,12 +814,7 @@ ALWAYS_INLINE float from_object_float( core::T_O* obj )
   // float. As in:  from_single_float_to_float, from_double_float_to_float, from_fixnum_to_float
   // and then have type checks in Common Lisp.
   T_sp tobj((gctools::Tagged)obj);
-  if (gc::IsA<Number_sp>(tobj)) {
-    Number_sp nobj = gc::As_unsafe<Number_sp>(tobj);
-    float x = clasp_to_float(nobj);
-    return x;
-  }
-  TYPE_ERROR(tobj,cl::_sym_Number_O);
+  return clasp_to_float(gc::As<Real_sp>(tobj));
 }
 
 ALWAYS_INLINE core::T_O* to_object_float( float x )

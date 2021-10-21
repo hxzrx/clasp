@@ -358,6 +358,47 @@
   (replace-call-with-vprimop inst primop)
   t)
 
+(defun wrap-coerce-real-to-df (inst datum)
+  (let* ((sf (cleavir-ctype:range 'single-float '* '* *clasp-system*))
+         (df (cleavir-ctype:range 'double-float '* '* *clasp-system*))
+         (dfsv (cleavir-ctype:single-value df *clasp-system*))
+         (primop-name
+           (cond ((arg-subtypep datum df) ; nothing-to-do
+                  (return-from wrap-coerce-real-to-df (values)))
+                 ((arg-subtypep datum sf) 'core::single-to-double)
+                 ;; subtype of real has been checked already
+                 (t 'core::real-to-double)))
+         (new (make-instance 'bir:output :derived-type dfsv))
+         (coerce (make-instance 'bir:vprimop
+                   :origin (bir:origin inst) :policy (bir:policy inst)
+                   :info (cleavir-primop-info:info primop-name)
+                   :outputs (list new))))
+    (bir:insert-instruction-before coerce inst)
+    (bir:replace-uses new datum)
+    (setf (bir:inputs coerce) (list datum)))
+  (values))
+
+(defun wrap-coerce-real-to-sf (inst datum)
+  (let* ((sf (cleavir-ctype:range 'single-float '* '* *clasp-system*))
+         (sfsv (cleavir-ctype:single-value sf *clasp-system*))
+         (df (cleavir-ctype:range 'double-float '* '* *clasp-system*))
+         (primop-name
+           (cond ((arg-subtypep datum sf) ; nothing to do
+                  (return-from wrap-coerce-real-to-sf (values)))
+                 ((arg-subtypep datum df)
+                  'core::double-to-single)
+                 ;; subtype of real has been checked already
+                 (t 'core::real-to-single)))
+         (new (make-instance 'bir:output :derived-type sfsv))
+         (coerce (make-instance 'bir:vprimop
+                   :origin (bir:origin inst) :policy (bir:policy inst)
+                   :info (cleavir-primop-info:info primop-name)
+                   :outputs (list new))))
+    (bir:insert-instruction-before coerce inst)
+    (bir:replace-uses new datum)
+    (setf (bir:inputs coerce) (list datum)))
+  (values))
+
 (defun wrap-coerce-sf-to-df (inst datum)
   (let* ((df (cleavir-ctype:single-value
               (cleavir-ctype:range 'double-float '* '* *clasp-system*)
@@ -480,15 +521,37 @@
                    (df
                      (cleavir-ctype:range 'double-float '* '* *clasp-system*)))
              `(progn
-                (define-bir-transform ,name (call) (single-float single-float)
+                (define-bir-transform ,name (call) (single-float
+                                                    (or rational
+                                                        short-float
+                                                        single-float))
+                  (wrap-coerce-real-to-sf call
+                                          (second (rest (bir:inputs call))))
                   (replace-with-vprimop-and-wrap call ',sf-primop ',sf))
-                (define-bir-transform ,name (call) (double-float double-float)
+                (define-bir-transform ,name (call) ((or rational
+                                                        short-float
+                                                        single-float)
+                                                    single-float)
+                  (wrap-coerce-real-to-sf call
+                                          (first (rest (bir:inputs call))))
+                  (replace-with-vprimop-and-wrap call ',sf-primop ',sf))
+                ;; We use this lengthy type instead of REAL in case at some
+                ;; future point we support long floats.
+                (define-bir-transform ,name (call) (double-float
+                                                    (or rational
+                                                        short-float
+                                                        single-float
+                                                        double-float))
+                  (wrap-coerce-real-to-df call
+                                          (second (rest (bir:inputs call))))
                   (replace-with-vprimop-and-wrap call ',df-primop ',df))
-                (define-bir-transform ,name (call) (single-float double-float)
-                  (wrap-coerce-sf-to-df call (first (rest (bir:inputs call))))
-                  (replace-with-vprimop-and-wrap call ',df-primop ',df))
-                (define-bir-transform ,name (call) (double-float single-float)
-                  (wrap-coerce-sf-to-df call (second (rest (bir:inputs call))))
+                (define-bir-transform ,name (call) ((or rational
+                                                        short-float
+                                                        single-float
+                                                        double-float)
+                                                    double-float)
+                  (wrap-coerce-real-to-df call
+                                          (first (rest (bir:inputs call))))
                   (replace-with-vprimop-and-wrap call ',df-primop ',df))))))
   (define-two-arg-f core:two-arg-+ core::two-arg-sf-+ core::two-arg-df-+)
   (define-two-arg-f core:two-arg-- core::two-arg-sf-- core::two-arg-df--)
@@ -496,32 +559,45 @@
   (define-two-arg-f core:two-arg-/ core::two-arg-sf-/ core::two-arg-df-/)
   (define-two-arg-f expt           core::sf-expt      core::df-expt))
 
-(define-bir-transform ftruncate (call) (single-float single-float)
+(define-bir-transform ftruncate (call) (single-float (or rational
+                                                         short-float
+                                                         single-float))
+  (wrap-coerce-real-to-sf call (second (rest (bir:inputs call))))
   (wrap-in-thei call (cleavir-env:parse-values-type-specifier
                       '(values single-float single-float &rest nil)
                       nil *clasp-system*))
   (replace-call-with-vprimop call 'core::sf-ftruncate))
-(define-bir-transform ftruncate (call) (double-float double-float)
+(define-bir-transform ftruncate (call) ((or rational short-float
+                                            single-float)
+                                        single-float)
+  (wrap-coerce-real-to-sf call (first (rest (bir:inputs call))))
+  (wrap-in-thei call (cleavir-env:parse-values-type-specifier
+                      '(values single-float single-float &rest nil)
+                      nil *clasp-system*))
+  (replace-call-with-vprimop call 'core::sf-ftruncate))
+;;; FIXME: i think our FTRUNCATE function has a bug: it should return doubles
+;;; if either argument is a double, by my reading.
+(define-bir-transform ftruncate (call) (double-float (or rational
+                                                         short-float
+                                                         single-float
+                                                         double-float))
+  (wrap-coerce-real-to-df call (second (rest (bir:inputs call))))
   (wrap-in-thei call (cleavir-env:parse-values-type-specifier
                       '(values double-float double-float &rest nil)
                       nil *clasp-system*))
   (replace-call-with-vprimop call 'core::df-ftruncate))
-(define-bir-transform ftruncate (call) (single-float double-float)
-  ;; FIXME: i think our FTRUNCATE function has a bug: it should return doubles in
-  ;; this case, by my reading.
-  (wrap-coerce-sf-to-df call (first (rest (bir:inputs call))))
+(define-bir-transform ftruncate (call) ((or rational short-float
+                                            single-float double-float)
+                                        double-float)
+  (wrap-coerce-real-to-df call (first (rest (bir:inputs call))))
   (wrap-in-thei call (cleavir-env:parse-values-type-specifier
                       '(values double-float double-float &rest nil)
                       nil *clasp-system*))
   (replace-call-with-vprimop call 'core::df-ftruncate))
-(define-bir-transform ftruncate (call) (double-float single-float)
-  (wrap-coerce-sf-to-df call (second (rest (bir:inputs call))))
-  (wrap-in-thei call (cleavir-env:parse-values-type-specifier
-                      '(values double-float double-float &rest nil)
-                      nil *clasp-system*))
-  (replace-call-with-vprimop call 'core::df-ftruncate))
-;; TODO: one-arg form
+;;; TODO: one-arg form
 
+;;; NOTE: Can't use rational-to-real coercions here since comparisons are
+;;; actually defined to do the opposite.
 (macrolet ((define-float-conditional (name sf-primop df-primop)
              `(progn
                 (define-bir-transform ,name (call) (single-float single-float)
@@ -616,15 +692,11 @@
 
 (define-bir-transform float (call) (single-float)
   (replace-call-with-argument call 0))
-(define-bir-transform float (call) (single-float single-float)
+(define-bir-transform float (call) (t single-float)
+  (wrap-coerce-real-to-sf call (first (rest (bir:inputs call))))
   (replace-call-with-argument call 0))
-(define-bir-transform float (call) (double-float double-float)
-  (replace-call-with-argument call 0))
-(define-bir-transform float (call) (single-float double-float)
-  (wrap-coerce-sf-to-df call (first (rest (bir:inputs call))))
-  (replace-call-with-argument call 0))
-(define-bir-transform float (call) (double-float single-float)
-  (wrap-coerce-df-to-sf call (first (rest (bir:inputs call))))
+(define-bir-transform float (call) (t double-float)
+  (wrap-coerce-real-to-df call (first (rest (bir:inputs call))))
   (replace-call-with-argument call 0))
 (define-bir-transform float (call) (double-float)
   (wrap-coerce-df-to-sf call (first (rest (bir:inputs call))))
