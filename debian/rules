@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+
+CXXFLAGS=
+CPPFLAGS=
+CFLAGS=
+DEB_BUILD_OPTIONS=nocheck nostrip
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	echo ./waf distclean --wscript-config=wscript-deb.config
+
+override_dh_auto_configure:
+	./waf configure --wscript-config=wscript-deb.config
+
+override_dh_auto_build:
+	./waf build_cboehmprecise --wscript-config=wscript-deb.config
+
+override_dh_auto_install:
+	./waf install_cboehmprecise  --wscript-config=wscript-deb.config "--destdir=$$(pwd)/debian/clasp/"

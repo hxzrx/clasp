@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+DIR=$(dirname $0)
+echo $DIR
+
+pwd
+
+m4 --define=image=$1 --define=tag=$2 "$DIR/Dockerfile" | docker build --tag deb_$1:$2 -f- .
