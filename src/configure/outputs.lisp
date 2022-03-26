@@ -120,13 +120,16 @@
                     :depfile "$out.d")
   (ninja:write-rule output-stream :generate-sif
                     :command "$lisp --script generate-sif.lisp $out $in"
+                    :restat 1
                     :description "Scrapping $in")
   (ninja:write-rule output-stream :generate-headers
                     :command "$lisp --script generate-headers.lisp $precise $variant-path $in"
+                    :restat 1
                     :description "Creating headers from sif files")
   (ninja:write-rule output-stream :static-analyzer
                     :command "$iclasp --non-interactive --feature ignore-extensions --load ${variant-path}static-analyzer.lisp -- $sif $in"
                     :description "Analyzing clasp"
+                    :restat 1
                     :pool "console")
   (ninja:write-rule output-stream :ar
                     :command "$ar ru $out $in"
@@ -149,14 +152,17 @@
   (ninja:write-rule output-stream :compile-aclasp
                     :command "$iclasp --norc --type image --disable-mpi --ignore-image --feature clasp-min --load compile-aclasp.lisp -- $source"
                     :description "Compiling aclasp"
+                    :restat 1
                     :pool "console")
   (ninja:write-rule output-stream :compile-bclasp
                     :command "$iclasp --norc --type image --disable-mpi --image $image --load compile-bclasp.lisp -- $source"
                     :description "Compiling bclasp"
+                    :restat 1
                     :pool "console")
   (ninja:write-rule output-stream :compile-cclasp
                     :command "$iclasp --norc --type image --disable-mpi --image $image --load compile-cclasp.lisp -- $source"
                     :description "Compiling cclasp"
+                    :restat 1
                     :pool "console")
   (ninja:write-rule output-stream :compile-module
                     :command "$iclasp --non-interactive --norc --type image --disable-mpi --image $image --feature ignore-extensions --load compile-module.lisp -- $out $in"
@@ -167,6 +173,7 @@
                     :pool "console")
   (ninja:write-rule output-stream :link-fasl
                     :command "$iclasp --norc --type image --disable-mpi --ignore-image --feature clasp-min --load link-fasl.lisp -- $out $in"
+                    :restat 1
                     :description "Linking $target")
   (ninja:write-rule output-stream "link-fasl-abc"
                     :command "$cxx $variant-ldflags $ldflags $ldflags-fasl -o$out $in $variant-ldlibs $ldlibs"
