@@ -298,7 +298,11 @@
                              (scraper-lisp-sources configuration)))
           (outputs (list (make-source (build-name target) :variant))))
   (ninja:write-build output-stream :generate-headers
-                     :explicit-inputs sifs
+                     :explicit-inputs (sort sifs
+                                            (lambda (x y)
+                                              (and (eq x :code)
+                                                   (eq y :variant)))
+                                            :key #'source-root)
                      :precise (if *variant-precise* "1" "0")
                      :variant-path *variant-path*
                      :sources (format nil "~{~a~^ ~}"
