@@ -34,7 +34,7 @@
        (code (uiop:getcwd)))
   ;; Get all the external dependencies
   (format t "Synchronizing external repositories~%~%")
-  #+(or)(loop for source in (uiop:read-file-form #P"repos.sexp")
+  (loop for source in (uiop:read-file-form #P"repos.sexp")
         for extension = (getf source :extension)
         if (or (not extension)
                (member extension extensions))
