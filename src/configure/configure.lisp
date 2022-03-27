@@ -394,6 +394,9 @@
    (nm :accessor nm
        :initarg :nm
        :initform nil)
+   (objcopy :accessor objcopy
+            :initarg :objcopy
+            :initform nil)
    (pkg-config :accessor pkg-config
                :initform nil
                :initarg :pkg-config)
@@ -418,10 +421,13 @@
                                                          (list (make-source #P"link-fasl.lisp" :build))
                                                          :static-analyzer
                                                          (list (make-source #P"static-analyzer.lisp" :variant))
+                                                         :snapshot
+                                                         (list (make-source #P"snapshot.lisp" :build))
                                                          :ninja
                                                          (list (make-source #P"build.ninja" :build)
-                                                               :bitcode :iclasp :aclasp :bclasp :cclasp
-                                                               :modules :extension-load :install-code :clasp)
+                                                               :bitcode :iclasp :aclasp :bclasp
+                                                               :cclasp :modules :extension-load
+                                                               :dclasp :install-code :clasp)
                                                          :config-h
                                                          (list (make-source #P"config.h" :variant)
                                                                :extension-load)
@@ -456,6 +462,10 @@
                         (precise *variant-precise* precise-p)
                         (prep *variant-prep* prep-p)
                         (debug *variant-debug* debug-p))
+  "Return a standardized name for a build step. name is downcased with
+a suffix of the bitcode name. If common is non-NIL then \"common\" will
+be used as the suffix. If the keys :gc, :precise, :prep or :debug are passed
+then they will overide the current variant's corresponding property."
   (format nil "~(~a~)-~a" name
           (cond (common
                  "common")
@@ -466,6 +476,7 @@
                  *variant-bitcode-name*))))
 
 (defun file-faso-extension (configuration)
+  "Return the file extension based on the build mode."
   (case (build-mode configuration)
     (:faso "faso")
     (:fasobc "fasobc")
@@ -473,6 +484,7 @@
     (otherwise "fasl")))
 
 (defun module-fasl-extension (configuration)
+  "Return the module extension, i.e. faso -> fasp, etc."
   (case (build-mode configuration)
     (:faso "fasp")
     (:fasobc "faspbc")
@@ -480,6 +492,7 @@
     (otherwise "fasl")))
 
 (defun image-fasl-extension (configuration)
+  "Return the extension for the clasp image."
   (case (build-mode configuration)
     (:fasl "lfasl")
     (:faso "fasp")
@@ -565,42 +578,6 @@
                  do (message :info "Loading script ~a" script)
                     (load script))))
 
-(defun run-program (command &key directory)
-  (uiop:run-program command
-                    :directory directory
-                    :output :interactive
-                    :error-output :output))
-
-(defun run-program-capture (command &key directory)
-  (ignore-errors
-    (multiple-value-bind (standard-output error-output code)
-        (uiop:run-program command
-                          :directory directory
-                          :ignore-error-status t
-                          :output '(:string :stripped t)
-                          :error-output '(:string :stripped t))
-      (declare (ignore error-output))
-      (when (zerop code)
-        standard-output))))
-                                          
-(defun git-clone (repository directory &optional branch)
-  (unless (probe-file (resolve-source directory))
-    (message :info "Cloning ~A" repository)
-    (run-program (list "git" "clone" repository directory)))
-  (when branch
-    (message :info "Checking out ~A from ~A" branch repository)
-    (run-program (list "git" "checkout" "--quiet" branch) :directory (resolve-source directory))))
-
-(defun git-commit (&key short)
-  (run-program-capture (format nil "git rev-parse~:[~; --short~] HEAD" short)))
-
-(defun git-describe ()
-  (run-program-capture (format nil "git describe --always")))
-
-(defun add-output (name path &rest targets)
-  (setf (gethash name (outputs *configuration*))
-        (cons path targets)))
-
 (defgeneric configure-unit (configuration unit))
 
 (defgeneric make-output-stream (configuration name path)
@@ -619,9 +596,6 @@
             (nconc (gethash target (targets *configuration*))
                    (list source))))))
 
-(defun hidden-component (component)
-  (equal #\. (uiop:first-char component)))
-
 (defgeneric print-prologue (configuration name output-stream)
   (:method (configuration name output-stream)
     (declare (ignore configuration name output-stream))))
@@ -638,14 +612,6 @@
   (:method (configuration name output-stream target sources &key &allow-other-keys)
     (declare (ignore configuration name output-stream target sources))))
 
-(defgeneric print-prologue (configuration name output-stream)
-  (:method (configuration name output-stream)
-    (declare (ignore configuration name output-stream targets))))
-
-(defgeneric print-epilogue (configuration name output-stream)
-  (:method (configuration name output-stream)
-    (declare (ignore configuration name output-stream targets))))
-
 (defgeneric print-variant-target-source (configuration name output-stream target source)
   (:method (configuration name output-stream target source)
     (declare (ignore configuration name output-stream target source))))
@@ -656,12 +622,15 @@
     (declare (ignore configuration name output-stream target sources))))
 
 (defun variant-name (variant)
+  "Return the variant name, i.e. boehm, boehmprecise, preciseprep, etc"
   (format nil "~:[~(~a~)~:[~;precise~]~;preciseprep~]"
           (variant-prep variant)
           (variant-gc variant)
           (variant-precise variant)))
 
 (defun variant-bitcode-name (variant)
+  "Return the fully qualified bitcode name. This is the variant name with a
+-d suffix if debugging is enabled."
   (format nil "~a~:[~;-d~]" (variant-name variant) (variant-debug variant)))
 
 (defun map-variants (configuration func)

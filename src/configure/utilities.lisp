@@ -41,3 +41,38 @@
                                 value
                                 (list value))))
         finally (return result-plist)))
+
+(defun run-program (command &key directory)
+  (uiop:run-program command
+                    :directory directory
+                    :output :interactive
+                    :error-output :output))
+
+(defun run-program-capture (command &key directory)
+  (ignore-errors
+    (multiple-value-bind (standard-output error-output code)
+        (uiop:run-program command
+                          :directory directory
+                          :ignore-error-status t
+                          :output '(:string :stripped t)
+                          :error-output '(:string :stripped t))
+      (declare (ignore error-output))
+      (when (zerop code)
+        standard-output))))
+
+(defun git-clone (repository directory &optional branch)
+  (unless (probe-file (resolve-source directory))
+    (message :info "Cloning ~A" repository)
+    (run-program (list "git" "clone" repository directory)))
+  (when branch
+    (message :info "Checking out ~A from ~A" branch repository)
+    (run-program (list "git" "checkout" "--quiet" branch) :directory (resolve-source directory))))
+
+(defun git-commit (&key short)
+  (run-program-capture (format nil "git rev-parse~:[~; --short~] HEAD" short)))
+
+(defun git-describe ()
+  (run-program-capture (format nil "git describe --always")))
+
+(defun hidden-component-p (component)
+  (equal #\. (uiop:first-char component)))

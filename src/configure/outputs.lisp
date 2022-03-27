@@ -90,6 +90,12 @@
     (pathname (elt core:*command-line-arguments* 1)))
  :output-file (pathname (elt core:*command-line-arguments* 0)))"))
 
+(defmethod print-prologue (configuration (name (eql :snapshot)) output-stream)
+  (declare (ignore configuration))
+  (write-string "(clos:compile-all-generic-functions)
+(gctools:save-lisp-and-die (elt core:*command-line-arguments* 0))
+(core:quit)" output-stream))
+
 (defmethod make-output-stream (configuration (name (eql :ninja)) path)
   (declare (ignore configuration name))
   (make-instance 'ninja::wrapping-stream
@@ -109,7 +115,8 @@
                         :lisp "sbcl" ;(first (uiop:raw-command-line-arguments))
                         :ldflags_fasl (if (uiop:os-macosx-p)
                                           "-flat_namespace -undefined dynamic_lookup -bundle"
-                                          "-shared"))
+                                          "-shared")
+                        :objcopy (objcopy configuration))
   (terpri output-stream)
   (ninja:write-rule output-stream :copy-file
                     :command "cp -f $in $out"
@@ -177,7 +184,13 @@
                     :description "Linking $target")
   (ninja:write-rule output-stream "link-fasl-abc"
                     :command "$cxx $variant-ldflags $ldflags $ldflags-fasl -o$out $in $variant-ldlibs $ldlibs"
-                    :description "Linking $out"))
+                    :description "Linking $out")
+  (ninja:write-rule output-stream :make-snapshot
+                    :command "$iclasp --non-interactive --load snapshot.lisp -- $out"
+                    :description "Creating snapshot $out")
+  (ninja:write-rule output-stream :make-snapshot-object
+                    :command "$objcopy --input-target binary --output-target elf64-x86-64 $in $out"
+                    :description "Creating object from snapshot $in"))
 
 (defmethod print-target-source
     (configuration (name (eql :ninja)) output-stream (target (eql :install-code)) source
@@ -579,6 +592,43 @@
                        :sif
 
                        (make-source "src/clasp_gc.sif" :code))))
+
+(defmethod print-variant-target-source
+    (configuration (name (eql :ninja)) output-stream (target (eql :dclasp))
+     (source c-source))
+  (declare (ignore configuration name output-stream target))
+  (list :objects (make-source-output source :type "o")))
+
+(defmethod print-variant-target-source
+    (configuration (name (eql :ninja)) output-stream (target (eql :dclasp))
+     (source cc-source))
+  (declare (ignore configuration name output-stream target))
+  (list :objects (make-source-output source :type "o")))
+
+(defmethod print-variant-target-sources
+    (configuration (name (eql :ninja)) output-stream (target (eql :dclasp)) sources
+     &key objects &allow-other-keys
+     &aux (cclasp (build-name :cclasp))
+          (dclasp (build-name :dclasp))
+          (iclasp (make-source (build-name :iclasp) :variant))
+          (snapshot (make-source "generated/clasp.snapshot" :variant))
+          (object (make-source "generated/clasp.o" :variant))
+          (outputs (list (make-source (build-name target) :variant))))
+  (ninja:write-build output-stream :make-snapshot
+                     :iclasp iclasp
+                     :explicit-inputs (list cclasp)
+                     :explicit-outputs (list snapshot))
+  (ninja:write-build output-stream :make-snapshot-object
+                     :explicit-inputs (list snapshot)
+                     :explicit-outputs (list object))
+  (ninja:write-build output-stream :link
+                     :variant-ldflags *variant-ldflags*
+                     :variant-ldlibs *variant-ldlibs*
+                     :explicit-inputs (cons object objects)
+                     :explicit-outputs outputs)
+  (ninja:write-build output-stream :phony
+                     :explicit-inputs outputs
+                     :explicit-outputs (list dclasp)))
 
 (defmethod print-epilogue (configuration (name (eql :ninja)) output-stream)
   (ninja:write-default output-stream "cclasp-boehm"))

@@ -12,13 +12,12 @@
 (defpackage #:configure
   (:use #:common-lisp)
   (:nicknames #:c)
-  (:export #:sources
+  (:export #:configure
            #:includes
-           #:recurse
-           #:add-output
            #:library
-           #:source-path
            #:make-source
            #:make-source-output
-           #:configure))
+           #:recurse
+           #:source-path
+           #:sources))
 

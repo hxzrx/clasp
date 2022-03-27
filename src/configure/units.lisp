@@ -32,7 +32,8 @@
                    (ar ar)
                    (cc cc)
                    (cxx cxx)
-                   (nm nm))
+                   (nm nm)
+                   (objcopy objcopy))
       configuration
     (message :emph "Configuring LLVM")
     (if llvm-config
@@ -63,6 +64,8 @@
       (setf cxx (merge-pathnames #P"clang++" llvm-bindir)))
     (unless nm
       (setf nm (merge-pathnames #P"llvm-nm" llvm-bindir)))
+    (unless objcopy
+      (setf objcopy (merge-pathnames #P"llvm-objcopy" llvm-bindir)))
     (append-cflags configuration (format nil "-I~a" llvm-includedir))
     (append-ldflags configuration (run-program-capture (list llvm-config "--ldflags")))
     (append-ldlibs configuration (run-program-capture (list llvm-config "--system-libs")))

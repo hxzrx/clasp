@@ -2,7 +2,8 @@
 
 (defmethod add-target-source :after (configuration (target (eql :iclasp)) source)
   (when (eq :code (source-root source))
-    (add-target-source configuration :install-code source)))
+    (add-target-source configuration :install-code source))
+  (add-target-source configuration :dclasp source))
 
 (defmethod add-target-source :after (configuration (target (eql :aclasp)) source)
   (when (eq :code (source-root source))
@@ -26,8 +27,8 @@
         unless (or (uiop:absolute-pathname-p rel-path)
                    (uiop:directory-pathname-p rel-path)
                    (equal "wscript" (file-namestring rel-path))
-                   (hidden-component (pathname-name rel-path))
-                   (some #'hidden-component (pathname-directory rel-path)))
+                   (hidden-component-p (pathname-name rel-path))
+                   (some #'hidden-component-p (pathname-directory rel-path)))
           do (add-target-source configuration target (make-source rel-path (source-root source)))))
 
 
